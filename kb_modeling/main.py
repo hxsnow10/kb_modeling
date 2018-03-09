@@ -1,42 +1,103 @@
+# encoding=utf-8
 import tensorflow as tf
-from config import Config
-from data_utils import load_data
-from model import TransEModel 
+from data_utils import load_data, read_dict, read_graph
+from tf_utils import load_config
+from tf_utils import check_dir
+from shutil import copy
+import heapq
+config=load_config()
+from model import TransEModel, TransRModel, TransDModel
 import sys
+ 
+model={
+    "transE": TransEModel,
+    "transD": TransRModel,
+    "transR": TransDModel
+}
 
-def read_graph(train_path):
-        def dt():
-            return defaultdict(set)
-        nexts=defaultdict(dt)
-        links=defaultdict(dt)
-        before=defaultdict(dt)
-        
-        for line in open(train_path):
-            e1,e2,rel=line.strip().split()
-            nexts[e1][rel].add(e2)
-            links[e1][e2].add(rel)
-            before[e2][rel].add(e1)
-        return nexts, links, before
-            
+def evaluate(sess, trainModel, data_path):
+    true_triples=read_graph([config.train_path, config.test_path])
+    entity2id, id2entity, eid2name= read_dict(config.entity_path)
+    relation2id, id2relation, rid2name= read_dict(config.relation_path)
+    # (Raw, Filtered) * (MR, Hits@10, Hits@5, Hits@1, MRR)
+    # Raw: all corrupted triple;  Filtered: all-true triple
+    # MR: ranking of test_triple
+    # Hits@N: whether test_triple in topN
+    # MRR: 1/MR
+    # everage -> final
+    
+    def test_step(pos_h, pos_t, pos_r):
+        feed_dict = {
+            trainModel.pos_h: [pos_h],
+            trainModel.pos_t: [pos_t],
+            trainModel.pos_r: [pos_r],
+        }
+        predict = sess.run(
+            [trainModel.predict], feed_dict)
+        return -predict[0]
+    
+    def rank(test_triple, compare_triples, filtered=False):
+        if filtered:
+            compare_triples=[triple for triple in compare_triples if triple not in true_triples]
+        dist=test_step(*test_triple)
+        dists=[test_step(*triple) for triple in compare_triples]
+        print '1'
+        MR=0
+        for k,dist_ in enumerate(dists):
+            if compare_triples[k]==test_triple: continue
+            if dist_>dist:
+                # if rank<=10: print k, get_name(compare_triples[k])
+                MR+=1
+        MR+=1
+        MRR=1.0/MR
+        samples = zip(compare_triples, dists)
+        print '2'
+        top10=heapq.nlargest(10,samples, key=lambda x:x[1])
+        top10=[x[0] for x in top10]
+        top5=top10[:5]
+        top1=top10[:1]
+        hits10=1 if test_triple in top10 else 0
+        hits5=1 if test_triple in top5 else 0
+        hits1=1 if test_triple in top1 else 0
+        metrics=[MR, MRR, hits10, hits5, hits1]
+        return metrics
+    metrics=[] 
+    for line in open(data_path).readlines():
+        try:
+            h, t ,r = line.strip().split()
+            h,t,r = entity2id[h], entity2id[t], relation2id[r]
+            print h,t,r
+            print eid2name[h],eid2name[t],rid2name[r]
+            compare_triples1 = [(h, t, r_) for r_ in id2relation.keys()]
+            compare_triples2 = [(h_, t, r) for h_ in id2entity.keys()]
+            compare_triples3 = [(h, t_, r) for t_ in id2entity.keys()]
+            metrics1 = [rank( (h,t,r), compare_triples1), rank( (h,r,t), compare_triples1, True)]
+            metrics2 = [rank( (h,t,r), compare_triples2), rank( (h,r,t), compare_triples2, True)]
+            metrics3 = [rank( (h,t,r), compare_triples3), rank( (h,r,t), compare_triples3, True)]
+            print [metrics1, metrics2, metrics3]
+            metrics.append([metrics1, metrics2, metrics3])
+        except Exception,e:
+            import traceback
+            traceback.print_exc()
+    metrics=np.mean(np.array(metrics),0)
+    return metrics
 
 def main(_):
-    config = Config()
+    config = load_config()
+    
+    Model = model[config.model]
     with tf.Graph().as_default():
         sess = tf.Session()
         with sess.as_default():
             initializer = tf.contrib.layers.xavier_initializer(uniform = False)
             with tf.variable_scope("model", reuse=None, initializer = initializer):
-                trainModel = TransEModel(config = config)
+                trainModel = Model(config = config)
 
-            global_step = tf.Variable(0, name="global_step", trainable=False)
-            optimizer = tf.train.GradientDescentOptimizer(0.001)
-            grads_and_vars = optimizer.compute_gradients(trainModel.loss)
-            train_op = optimizer.apply_gradients(grads_and_vars, global_step=global_step)
-            saver = tf.train.Saver()
-            sess.run(tf.initialize_all_variables())
-            if (config.loadFromData):
-                saver.restore(sess, config.model_path)
-                     
+            sess.run(trainModel.init)
+            
+            if (config.loadFromData) or sys.argv[1]=="test":
+                trainModel.saver.restore(sess, config.model_path)
+            
             def train_step(pos_h_batch, pos_t_batch, pos_r_batch, neg_h_batch, neg_t_batch, neg_r_batch):
                 feed_dict = {
                     trainModel.pos_h: pos_h_batch,
@@ -46,87 +107,28 @@ def main(_):
                     trainModel.neg_t: neg_t_batch,
                     trainModel.neg_r: neg_r_batch
                 }
-                _, step, loss = sess.run(
-                    [train_op, global_step, trainModel.loss], feed_dict)
+                _, loss = sess.run(
+                    [trainModel.train_op, trainModel.loss], feed_dict)
                 return loss
 
-            def test_step(pos_h_batch, pos_t_batch, pos_r_batch):
-                feed_dict = {
-                    trainModel.pos_h: pos_h_batch,
-                    trainModel.pos_t: pos_t_batch,
-                    trainModel.pos_r: pos_r_batch,
-                }
-                step, predict = sess.run(
-                    [global_step, trainModel.predict], feed_dict)
-                return predict
 
             if sys.argv[1]=="train":
+                check_dir(config.summary_dir)
+                check_dir(config.model_dir)
+                copy("config.py", config.summary_dir) 
+                copy("config.py", config.model_dir)
                 data=load_data(config,"train")
                 for times in range(config.trainTimes):
                     res = 0.0
                     for k,batch_data in enumerate(data):
                         ph, pt, pr, nh, nt, nr = batch_data
                         res += train_step(ph, pt, pr, nh, nt, nr)
-                        current_step = tf.train.global_step(sess, global_step)
                         if k%1000==0:
                             print k, res/k
-                    print times
-                    print res
-                    saver.save(sess, config.model_path)
+                    # evaluate(sess, trainModel, config.test_path)
+                    trainModel.saver.save(sess, config.model_path)
             else:
-                nexts, links=read_graph(config.train_path)
-                rel_emb=sess.run(trainModel.rel_embeddings)
-                ent_emb=sess.run(trainModel.ent_embeddings)
-                print "ent_shape", ent_emb.shape
-                print "rel_shape", rel_emb.shape
-                
-                
-                def sum_emb(path):
-                    a=rel_emb[int(path[0])]
-                    for p in path[1:]:
-                        a=a+rel_emb[int(p)]
-                    return a
-                
-                def rank(v,v_,emb,name,trainset):
-                    dist=np.linalg.norm(v - v_, ord=1)
-                    dists = [np.linalg.norm(v_ - emb[i], ord=1) for i in range(emb.shape[0])]
-                    rank=0
-                    for k,dist_ in enumerate(dists):
-                        if k in trainset:continue
-                        if dist_<dist:
-                            if rank<=10:
-                                print k, name.get(k,None)
-                                pass
-                            rank+=1
-                    return rank
-                rank_tails=[]
-                rank_rels=[]
-                for line in open(config.test_path).readlines()[1:]:
-                    try:
-                            e1, e2 ,rel = line.strip().split()
-                            trainset_e2=(entity2id[x] for x in nexts[e1][rel])
-                            trainset_r=(relation2id[x] for x in links[e1][e2])
-                            e1,e2,rel = entity2id[e1], entity2id[e2], relation2id[rel]
-                            print e1,e2,rel
-                            print eid2name[e1],eid2name[e2],rid2name[rel]
-                            v1, v2, vr = ent_emb[int(e1)], ent_emb[int(e2)], rel_emb[int(rel)]
-                            v2_=v1+vr
-                            vr_=v2-v1
-                            print '-'*20+"predict tail from <head, relation>"+'-'*20
-                            rank_tail=rank(v2, v2_, ent_emb, eid2name, trainset_e2)
-                            print rank_tail
-                            print '-'*20+"predict relation from <head, tail>"+'-'*20
-                            rank_rel=rank(vr, vr_, rel_emb, rid2name, trainset_r)
-                            print rank_rel
-                            raw_input("XXXXXXX")
-                            rank_tails.append(rank_tail)
-                            rank_rels.append(rank_rel)
-                    except Exception,e:
-                            print e
-                            import traceback
-                            traceback.print_exc()
-                            pass
-                    print sum(rank_tails)/len(rank_tails), sum(rank_rels)/len(rank_rels)
+                evaluate(sess, trainModel, config.test_path)
 
 if __name__ == "__main__":
     tf.app.run()

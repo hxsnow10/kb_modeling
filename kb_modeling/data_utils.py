@@ -2,6 +2,8 @@
 from random import randint
 import numpy as np
 from config import config
+from collections import defaultdict
+
 def read_dict(path):
     a,b,c={},{},{}
     for k,line in enumerate(open(path).readlines()):
@@ -55,6 +57,22 @@ class TripleDataset():
                 batch_=np.array(batch[:100], dtype=np.int32)
                 yield batch_[:,0],batch_[:,1],batch_[:,2],batch_[:,3],batch_[:,4],batch_[:,5] 
                 batch=batch[100:]
+
+def read_graph(paths):
+    def dt():
+        return defaultdict(set)
+    nexts=defaultdict(dt)
+    links=defaultdict(dt)
+    before=defaultdict(dt)
+    triples=set([])
+    for path in paths:
+        for line in open(path):
+            e1,e2,rel=line.strip().split()
+            nexts[e1][rel].add(e2)
+            links[e1][e2].add(rel)
+            before[e2][rel].add(e1)
+            triples.add((e1, e2, rel))
+    return triples
 
 def load_data(config,mode="train"):
     entity2id, id2entity, eid2name= read_dict(config.entity_path)
