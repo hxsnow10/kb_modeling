@@ -16,9 +16,10 @@ model={
 }
 
 def evaluate(sess, trainModel, data_path):
-    true_triples=read_graph([config.train_path, config.test_path])
     entity2id, id2entity, eid2name= read_dict(config.entity_path)
     relation2id, id2relation, rid2name= read_dict(config.relation_path)
+    true_triples=read_graph([config.train_path, config.test_path])
+    true_triples=set([(entity2id[h], entity2id[t], relation2id[r]) for h,t,r in true_triples])
     # (Raw, Filtered) * (MR, Hits@10, Hits@5, Hits@1, MRR)
     # Raw: all corrupted triple;  Filtered: all-true triple
     # MR: ranking of test_triple
@@ -34,13 +35,15 @@ def evaluate(sess, trainModel, data_path):
         }
         predict = sess.run(
             [trainModel.predict], feed_dict)
-        return -predict[0]
+        return -predict
     
     def rank(test_triple, compare_triples, filtered=False):
+        s=len(compare_triples)
         if filtered:
             compare_triples=[triple for triple in compare_triples if triple not in true_triples]
         dist=test_step(*test_triple)
         dists=[test_step(*triple) for triple in compare_triples]
+
         print '1'
         MR=0
         for k,dist_ in enumerate(dists):
@@ -71,9 +74,9 @@ def evaluate(sess, trainModel, data_path):
             compare_triples1 = [(h, t, r_) for r_ in id2relation.keys()]
             compare_triples2 = [(h_, t, r) for h_ in id2entity.keys()]
             compare_triples3 = [(h, t_, r) for t_ in id2entity.keys()]
-            metrics1 = [rank( (h,t,r), compare_triples1), rank( (h,r,t), compare_triples1, True)]
-            metrics2 = [rank( (h,t,r), compare_triples2), rank( (h,r,t), compare_triples2, True)]
-            metrics3 = [rank( (h,t,r), compare_triples3), rank( (h,r,t), compare_triples3, True)]
+            metrics1 = [rank( (h,t,r), compare_triples1), rank( (h,t,r), compare_triples1, True)]
+            metrics2 = [rank( (h,t,r), compare_triples2), rank( (h,t,r), compare_triples2, True)]
+            metrics3 = [rank( (h,t,r), compare_triples3), rank( (h,t,r), compare_triples3, True)]
             print [metrics1, metrics2, metrics3]
             metrics.append([metrics1, metrics2, metrics3])
         except Exception,e:
@@ -113,10 +116,11 @@ def main(_):
 
 
             if sys.argv[1]=="train":
-                check_dir(config.summary_dir)
-                check_dir(config.model_dir)
-                copy("config.py", config.summary_dir) 
-                copy("config.py", config.model_dir)
+                if  not config.loadFromData:
+                    check_dir(config.summary_dir)
+                    check_dir(config.model_dir)
+                    copy("config.py", config.summary_dir) 
+                    copy("config.py", config.model_dir)
                 data=load_data(config,"train")
                 for times in range(config.trainTimes):
                     res = 0.0

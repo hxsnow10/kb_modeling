@@ -2,7 +2,9 @@ KB_modeling
 =======
 
 ### Support
-TransE on WN, FB, Wikidata
+* models: TransE/TransD/TransH/TransR
+* data_loader on WN, FB, Wikidata ( new)
+* metrics on (MR, MRR, Hits@N)\*(Raw, Filter)
 
 ### TODO1
 
@@ -13,4 +15,5 @@ reimplement:
 * DISTMULT, ProjE
 * ConvE, ConvKB, IRN
 * 
+
 # 

@@ -15,7 +15,7 @@ class Config(object):
         self.relation_total=len(open(data_dir+"/relation2id.txt",'r').readlines())
         
         self.model="transE"
-        self.loadFromData = False
+        self.loadFromData =True
         self.L1_flag = True
         self.hidden_size = 50
         self.trainTimes = 500
