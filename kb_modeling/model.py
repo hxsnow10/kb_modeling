@@ -6,17 +6,12 @@ import time
 import datetime
 from collections import defaultdict
 from data_utils import TripleDataset
-from config import Config
+from config import config
+import math
 
-class TransEModel(object):
+class BaseModel(object):
 
-    def __init__(self, config):
-        entity_total=config.entity_total
-        relation_total=config.relation_total
-        batch_size = 100
-        size = config.hidden_size
-        margin = config.margin
-
+    def __init__(self):
         self.pos_h = tf.placeholder(tf.int32, [None])
         self.pos_t = tf.placeholder(tf.int32, [None])
         self.pos_r = tf.placeholder(tf.int32, [None])
@@ -25,140 +20,144 @@ class TransEModel(object):
         self.neg_t = tf.placeholder(tf.int32, [None])
         self.neg_r = tf.placeholder(tf.int32, [None])
 
-        with tf.name_scope("embedding"):
-            self.ent_embeddings = tf.get_variable(name = "ent_embedding", shape = [entity_total, size], initializer = tf.contrib.layers.xavier_initializer(uniform = False))
-            self.rel_embeddings = tf.get_variable(name = "rel_embedding", shape = [relation_total, size], initializer = tf.contrib.layers.xavier_initializer(uniform = False))
-            pos_h_e = tf.nn.embedding_lookup(self.ent_embeddings, self.pos_h)
-            pos_t_e = tf.nn.embedding_lookup(self.ent_embeddings, self.pos_t)
-            pos_r_e = tf.nn.embedding_lookup(self.rel_embeddings, self.pos_r)
-            neg_h_e = tf.nn.embedding_lookup(self.ent_embeddings, self.neg_h)
-            neg_t_e = tf.nn.embedding_lookup(self.ent_embeddings, self.neg_t)
-            neg_r_e = tf.nn.embedding_lookup(self.rel_embeddings, self.neg_r)
+        self.build_network()
+        self.build_loss()
+        self.build_others()
 
-        if config.L1_flag:
-            pos = tf.reduce_sum(abs(pos_h_e + pos_r_e - pos_t_e), 1, keep_dims = True)
-            neg = tf.reduce_sum(abs(neg_h_e + neg_r_e - neg_t_e), 1, keep_dims = True)
-            self.predict = pos
-        else:
-            pos = tf.reduce_sum((pos_h_e + pos_r_e - pos_t_e) ** 2, 1, keep_dims = True)
-            neg = tf.reduce_sum((neg_h_e + neg_r_e - neg_t_e) ** 2, 1, keep_dims = True)
-            self.predict = pos
-        
-        with tf.name_scope("output"):
-            self.loss = tf.reduce_sum(tf.maximum(pos - neg + margin, 0))
-            
-        global_step = tf.Variable(0, name="global_step", trainable=False)
-        optimizer = tf.train.GradientDescentOptimizer(0.001)
+    def build_others(self):
+        tf.summary.scalar("loss", self.loss)
+        self.global_step = tf.Variable(0, name="global_step", trainable=False)
+        self.learning_rate = tf.train.exponential_decay(config.start_learning_rate, global_step,
+            config.decay_steps, config.decay_rate, staircase=True)
+        optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
         grads_and_vars = optimizer.compute_gradients(self.loss)
-        self.init=tf.initialize_all_variables()
-        self.train_op = optimizer.apply_gradients(grads_and_vars, global_step=global_step)
+        self.train_op = optimizer.apply_gradients(grads_and_vars, global_step=self.global_step)
+        tf.summary.scalar("learning_rate", self.learning_rate)
+        self.step_summaries = tf.summary.merge_all()
+        # optimizer = tf.train.AdamOptimizer(0.01)
+        # self.train_op=optimizer.minimize(self.loss)
+        self.init=tf.global_variables_initializer()
         self.saver = tf.train.Saver()
         
-class TransRModel(object):
-
-    def __init__(self, config):
-
-        entity_total = config.entity
-        relation_total = config.relation
-        batch_size = config.batch_size
-        sizeE = config.hidden_sizeE
-        sizeR = config.hidden_sizeR
-        margin = config.margin
-
-        with tf.name_scope("read_inputs"):
-            self.pos_h = tf.placeholder(tf.int32, [batch_size])
-            self.pos_t = tf.placeholder(tf.int32, [batch_size])
-            self.pos_r = tf.placeholder(tf.int32, [batch_size])
-            self.neg_h = tf.placeholder(tf.int32, [batch_size])
-            self.neg_t = tf.placeholder(tf.int32, [batch_size])
-            self.neg_r = tf.placeholder(tf.int32, [batch_size])
-
-        with tf.name_scope("embedding"):
-            self.ent_embeddings = tf.get_variable(name = "ent_embedding", shape = [entity_total, sizeE], initializer = tf.contrib.layers.xavier_initializer(uniform = False))
-            self.rel_embeddings = tf.get_variable(name = "rel_embedding", shape = [relation_total, sizeR], initializer = tf.contrib.layers.xavier_initializer(uniform = False))
-            self.rel_matrix = tf.get_variable(name = "rel_matrix", shape = [relation_total, sizeE * sizeR], initializer = tf.contrib.layers.xavier_initializer(uniform = False))
-
-        with tf.name_scope('lookup_embeddings'):
-            pos_h_e = tf.reshape(tf.nn.embedding_lookup(self.ent_embeddings, self.pos_h), [-1, sizeE, 1])
-            pos_t_e = tf.reshape(tf.nn.embedding_lookup(self.ent_embeddings, self.pos_t), [-1, sizeE, 1])
-            pos_r_e = tf.reshape(tf.nn.embedding_lookup(self.rel_embeddings, self.pos_r), [-1, sizeR])
-            neg_h_e = tf.reshape(tf.nn.embedding_lookup(self.ent_embeddings, self.neg_h), [-1, sizeE, 1])
-            neg_t_e = tf.reshape(tf.nn.embedding_lookup(self.ent_embeddings, self.neg_t), [-1, sizeE, 1])
-            neg_r_e = tf.reshape(tf.nn.embedding_lookup(self.rel_embeddings, self.neg_r), [-1, sizeR])          
-            matrix = tf.reshape(tf.nn.embedding_lookup(self.rel_matrix, self.neg_r), [-1, sizeR, sizeE])
-
-            pos_h_e = tf.reshape(tf.batch_matmul(matrix, pos_h_e), [-1, sizeR])
-            pos_t_e = tf.reshape(tf.batch_matmul(matrix, pos_t_e), [-1, sizeR])
-            neg_h_e = tf.reshape(tf.batch_matmul(matrix, neg_h_e), [-1, sizeR])
-            neg_t_e = tf.reshape(tf.batch_matmul(matrix, neg_t_e), [-1, sizeR])
-
+class MarginBasedModel(BaseModel):
+    
+    def build_loss(self): 
         if config.L1_flag:
-            pos = tf.reduce_sum(abs(pos_h_e + pos_r_e - pos_t_e), 1, keep_dims = True)
-            neg = tf.reduce_sum(abs(neg_h_e + neg_r_e - neg_t_e), 1, keep_dims = True)
+            pos = tf.reduce_sum(abs( self.pos_dist ), 1, keep_dims = True)
+            neg = tf.reduce_sum(abs( self.neg_dist ), 1, keep_dims = True)
             self.predict = pos
         else:
-            pos = tf.reduce_sum((pos_h_e + pos_r_e - pos_t_e) ** 2, 1, keep_dims = True)
-            neg = tf.reduce_sum((neg_h_e + neg_r_e - neg_t_e) ** 2, 1, keep_dims = True)
+            pos = tf.reduce_sum((self.pos_dist) ** 2, 1, keep_dims = True)
+            neg = tf.reduce_sum((self.neg_dist) ** 2, 1, keep_dims = True)
             self.predict = pos
-
         with tf.name_scope("output"):
-            self.loss = tf.reduce_sum(tf.maximum(pos - neg + margin, 0))
+            self.loss = tf.reduce_sum(tf.maximum(pos - neg + config.margin, 0))
+        
+class TransEModel(MarginBasedModel):
 
-class TransDModel(object):
+    def build_network(self):
+        with tf.name_scope("embedding"):
+            self.ent_embeddings = tf.get_variable(name = "ent_embedding", shape = [config.entity_total, config.hidden_size], initializer = tf.contrib.layers.xavier_initializer(uniform = False))
+            self.rel_embeddings = tf.get_variable(name = "rel_embedding", shape = [config.relation_total, config.hidden_size], initializer = tf.contrib.layers.xavier_initializer(uniform = False))
+            def calc(h, t, r):
+                return tf.nn.embedding_lookup(self.ent_embeddings, h),\
+                    tf.nn.embedding_lookup(self.ent_embeddings, t),\
+                    tf.nn.embedding_lookup(self.rel_embeddings, r)
+            
+            self.pos_h_e, self.pos_t_e, self.pos_r_e = calc(self.pos_h, self.pos_t, self.pos_r)
+            self.neg_h_e, self.neg_t_e, self.neg_r_e = calc(self.neg_h, self.neg_t, self.neg_r)
+        self.pos_dist = self.pos_h_e + self.pos_r_e - self.pos_t_e
+        self.neg_dist = self.neg_h_e + self.neg_r_e - self.neg_t_e
+
+class TransRModel(MarginBasedModel):
+
+    def build_network(self):
+        sizeE = config.hidden_size
+        sizeR = config.hidden_size
+
+        with tf.name_scope("embedding"):
+            self.ent_embeddings = tf.get_variable(name = "ent_embedding", shape = [config.entity_total, sizeE], initializer = tf.contrib.layers.xavier_initializer(uniform = False))
+            self.rel_embeddings = tf.get_variable(name = "rel_embedding", shape = [config.relation_total, sizeR], initializer = tf.contrib.layers.xavier_initializer(uniform = False))
+            self.rel_matrix = tf.get_variable(name = "rel_matrix", shape = [config.relation_total, sizeE * sizeR], initializer = tf.contrib.layers.xavier_initializer(uniform = False))
+            
+            def calc(h,t,r):
+                
+                h_e = tf.reshape(tf.nn.embedding_lookup(self.ent_embeddings, h), [-1, sizeE, 1])
+                t_e = tf.reshape(tf.nn.embedding_lookup(self.ent_embeddings, t), [-1, sizeE, 1])
+                r_e = tf.reshape(tf.nn.embedding_lookup(self.rel_embeddings, r), [-1, sizeR])
+                matrix = tf.reshape(tf.nn.embedding_lookup(self.rel_matrix, r), [-1, sizeR, sizeE])
+                h_e = tf.reshape(tf.matmul(matrix, h_e), [-1, sizeR])
+                t_e = tf.reshape(tf.matmul(matrix, t_e), [-1, sizeR])
+                return h_e, t_e, r_e
+            self.pos_h_e, self.pos_t_e, self.pos_r_e = calc(self.pos_h, self.pos_t, self.pos_r)
+            self.neg_h_e, self.neg_t_e, self.neg_r_e = calc(self.neg_h, self.neg_t, self.neg_r)
+        self.pos_dist = self.pos_h_e + self.pos_r_e - self.pos_t_e
+        self.neg_dist = self.neg_h_e + self.neg_r_e - self.neg_t_e
+
+class TransDModel(MarginBasedModel):
 
     def calc(self, e, t, r):
         return e + tf.reduce_sum(e * t, 1, keep_dims = True) * r
 
-    def __init__(self, config):
-
-        entity_total = config.entity
-        relation_total = config.relation
-        batch_size = config.batch_size
-        size = config.hidden_size
-        margin = config.margin
-
-        self.pos_h = tf.placeholder(tf.int32, [None])
-        self.pos_t = tf.placeholder(tf.int32, [None])
-        self.pos_r = tf.placeholder(tf.int32, [None])
-
-        self.neg_h = tf.placeholder(tf.int32, [None])
-        self.neg_t = tf.placeholder(tf.int32, [None])
-        self.neg_r = tf.placeholder(tf.int32, [None])
+    def build_network(self):
+        size=config.hidden_size
 
         with tf.name_scope("embedding"):
-            self.ent_embeddings = tf.get_variable(name = "ent_embedding", shape = [entity_total, size], initializer = tf.contrib.layers.xavier_initializer(uniform = False))
-            self.rel_embeddings = tf.get_variable(name = "rel_embedding", shape = [relation_total, size], initializer = tf.contrib.layers.xavier_initializer(uniform = False))
-            self.ent_transfer = tf.get_variable(name = "ent_transfer", shape = [entity_total, size], initializer = tf.contrib.layers.xavier_initializer(uniform = False))
-            self.rel_transfer = tf.get_variable(name = "rel_transfer", shape = [relation_total, size], initializer = tf.contrib.layers.xavier_initializer(uniform = False))
+            self.ent_embeddings = tf.get_variable(name = "ent_embedding", shape = [config.entity_total, size], initializer = tf.contrib.layers.xavier_initializer(uniform = False))
+            self.rel_embeddings = tf.get_variable(name = "rel_embedding", shape = [config.relation_total, size], initializer = tf.contrib.layers.xavier_initializer(uniform = False))
+            self.ent_transfer = tf.get_variable(name = "ent_transfer", shape = [config.entity_total, size], initializer = tf.contrib.layers.xavier_initializer(uniform = False))
+            self.rel_transfer = tf.get_variable(name = "rel_transfer", shape = [config.relation_total, size], initializer = tf.contrib.layers.xavier_initializer(uniform = False))
+            def calc(h,t,r):
+                h_e = tf.nn.embedding_lookup(self.ent_embeddings, h)
+                t_e = tf.nn.embedding_lookup(self.ent_embeddings, t)
+                r_e = tf.nn.embedding_lookup(self.rel_embeddings, r)
+                h_t = tf.nn.embedding_lookup(self.ent_transfer, h)
+                t_t = tf.nn.embedding_lookup(self.ent_transfer, t)
+                r_t = tf.nn.embedding_lookup(self.rel_transfer, r)
+                h_e = self.calc(h_e, h_t, r_t)
+                t_e = self.calc(t_e, t_t, r_t)
+                return h_e, t_e, r_e
+            self.pos_h_e, self.pos_t_e, self.pos_r_e = calc(self.pos_h, self.pos_t, self.pos_r)
+            self.neg_h_e, self.neg_t_e, self.neg_r_e = calc(self.neg_h, self.neg_t, self.neg_r)
+        self.pos_dist = self.pos_h_e + self.pos_r_e - self.pos_t_e
+        self.neg_dist = self.neg_h_e + self.neg_r_e - self.neg_t_e
 
-            pos_h_e = tf.nn.embedding_lookup(self.ent_embeddings, self.pos_h)
-            pos_t_e = tf.nn.embedding_lookup(self.ent_embeddings, self.pos_t)
-            pos_r_e = tf.nn.embedding_lookup(self.rel_embeddings, self.pos_r)
-            pos_h_t = tf.nn.embedding_lookup(self.ent_transfer, self.pos_h)
-            pos_t_t = tf.nn.embedding_lookup(self.ent_transfer, self.pos_t)
-            pos_r_t = tf.nn.embedding_lookup(self.rel_transfer, self.pos_r)
 
-            neg_h_e = tf.nn.embedding_lookup(self.ent_embeddings, self.neg_h)
-            neg_t_e = tf.nn.embedding_lookup(self.ent_embeddings, self.neg_t)
-            neg_r_e = tf.nn.embedding_lookup(self.rel_embeddings, self.neg_r)
-            neg_h_t = tf.nn.embedding_lookup(self.ent_transfer, self.neg_h)
-            neg_t_t = tf.nn.embedding_lookup(self.ent_transfer, self.neg_t)
-            neg_r_t = tf.nn.embedding_lookup(self.rel_transfer, self.neg_r)
+class DistMul(MarginBasedModel):
 
-            pos_h_e = self.calc(pos_h_e, pos_h_t, pos_r_t)
-            pos_t_e = self.calc(pos_t_e, pos_t_t, pos_r_t)
-            neg_h_e = self.calc(neg_h_e, neg_h_t, neg_r_t)
-            neg_t_e = self.calc(neg_t_e, neg_t_t, neg_r_t)
+    def build_network(self):
+        size = config.hidden_size
+        sizeE = config.hidden_size
+        sizeR = config.hidden_size
 
-        if config.L1_flag:
-            pos = tf.reduce_sum(abs(pos_h_e + pos_r_e - pos_t_e), 1, keep_dims = True)
-            neg = tf.reduce_sum(abs(neg_h_e + neg_r_e - neg_t_e), 1, keep_dims = True)
-            self.predict = pos
-        else:
-            pos = tf.reduce_sum((pos_h_e + pos_r_e - pos_t_e) ** 2, 1, keep_dims = True)
-            neg = tf.reduce_sum((neg_h_e + neg_r_e - neg_t_e) ** 2, 1, keep_dims = True)
-            self.predict = pos
+        with tf.name_scope("embedding"):
+            self.ent_embeddings = tf.get_variable(name = "ent_embedding", shape = [config.entity_total, sizeE],
+             initializer = tf.random_uniform_initializer(-math.pow(1.0/size, 0.33), math.pow(1.0/size, 0.33)))
+            # , initializer = tf.contrib.layers.xavier_initializer(uniform = False))
+            self.rel_embeddings = tf.get_variable(name = "rel_embedding", shape = [config.relation_total, sizeE],
+             initializer = tf.random_uniform_initializer(-math.pow(1.0/size, 0.33), math.pow(1.0/size, 0.33)))
+            # , initializer = tf.contrib.layers.xavier_initializer(uniform = False))
+            def calc(h,t,r):
+                h_e = tf.reshape(tf.nn.embedding_lookup(self.ent_embeddings, h), [-1, 1, sizeE])
+                t_e = tf.reshape(tf.nn.embedding_lookup(self.ent_embeddings, t), [-1, sizeE,1])
+                r_e = tf.reshape(tf.nn.embedding_lookup(self.rel_embeddings, r), [-1, sizeE])
+                r_e = tf.matrix_diag(r_e)
+                score=tf.matmul(tf.matmul(h_e,r_e), t_e)
+                return score
 
+            self.pos_score=tf.reshape(calc(self.pos_h, self.pos_t, self.pos_r),[-1,1])
+            self.neg_score=tf.reshape(calc(self.neg_h, self.neg_t, self.neg_r),[-1,1])
+
+    def build_loss(self):
+        self.predict=self.pos_score
         with tf.name_scope("output"):
-            self.loss = tf.reduce_sum(tf.maximum(pos - neg + margin, 0))
-
+            self.losses = self.pos_score - self.neg_score
+            self.loss = tf.reduce_sum(tf.maximum(self.pos_score - self.neg_score+1,0))
+            # self.loss = tf.reduce_sum(self.pos_score - self.neg_score)
+            ''' 
+            self.logits=tf.concat([self.pos_score,self.neg_score],1)
+            self.labels=tf.concat([tf.ones([config.batch_size,1]), tf.zeros([config.batch_size,1])],1)
+            self.loss=tf.nn.softmax_cross_entropy_with_logits(logits=self.logits, labels=self.labels)
+            self.loss=tf.reduce_sum(self.loss)
+            '''
+            # self.loss = tf.reduce_sum(-(self.pos_score-self.neg_score)/(abs(self.pos_score)+abs(self.neg_score)))
