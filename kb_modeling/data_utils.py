@@ -53,10 +53,10 @@ class TripleDataset():
                 e1_=randint(0,self.entity_num-1)
                 if e1_!=e1:break
             batch.append([e1,e2,r,e1_,e2,r])
-            if len(batch)>=100:
-                batch_=np.array(batch[:100], dtype=np.int32)
+            if len(batch)>=config.batch_size:
+                batch_=np.array(batch[:config.batch_size], dtype=np.int32)
                 yield batch_[:,0],batch_[:,1],batch_[:,2],batch_[:,3],batch_[:,4],batch_[:,5] 
-                batch=batch[100:]
+                batch=batch[config.batch_size:]
 
 def read_graph(paths):
     def dt():

@@ -2,7 +2,6 @@
 import tensorflow as tf
 
 class Config(object):
-
     def __init__(self):
         
         data_dir=self.data_dir="/opt/xia.hong/data/wiki_data/wikidata/wikidata_triples/train"
@@ -17,13 +16,14 @@ class Config(object):
         
         self.model="distmul"
         self.loadFromData =True
-        self.L1_flag = True
-        self.hidden_size = 50
+        self.L1_flag = False
+        self.hidden_size = 512
         self.trainTimes = 500
-        self.margin = 2.0
-        self.batch_size=100
+        self.margin = 1.0
+        self.batch_size=500
         self.start_learning_rate=0.05
-        self.decay_steps = 5*len(open(self.train_path).readlines())/self.batch_size
+        self.mini_learning_rate=0.0005
+        self.decay_steps = 40*len(open(self.train_path).readlines())/self.batch_size
         self.decay_rate = 0.75
         
         self.model_dir="./RESULT/{data}/model_{model}_{size}_L1={L1}_{margin}".format(
@@ -44,9 +44,10 @@ class Config(object):
 
         self.sess_conf = tf.ConfigProto(
               gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.3),
-              device_count = {'CPU': 20, 'GPU':1},
+              device_count = {'CPU': 20, 'GPU':0},
               allow_soft_placement=True,
               log_device_placement=False)
-        # self.sess_conf=None
+        print self.summary_dir
+        #self.sess_conf=None
 config=Config()
 

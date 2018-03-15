@@ -27,8 +27,9 @@ class BaseModel(object):
     def build_others(self):
         tf.summary.scalar("loss", self.loss)
         self.global_step = tf.Variable(0, name="global_step", trainable=False)
-        self.learning_rate = tf.train.exponential_decay(config.start_learning_rate, global_step,
+        self.learning_rate = tf.train.exponential_decay(config.start_learning_rate, self.global_step,
             config.decay_steps, config.decay_rate, staircase=True)
+        self.learning_rate=tf.maximum(self.learning_rate, config.mini_learning_rate)
         optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
         grads_and_vars = optimizer.compute_gradients(self.loss)
         self.train_op = optimizer.apply_gradients(grads_and_vars, global_step=self.global_step)
@@ -52,6 +53,9 @@ class MarginBasedModel(BaseModel):
             self.predict = pos
         with tf.name_scope("output"):
             self.loss = tf.reduce_sum(tf.maximum(pos - neg + config.margin, 0))
+
+#class NegativeSamplingModel(BaseModel):
+#    def build_loss(self):
         
 class TransEModel(MarginBasedModel):
 
