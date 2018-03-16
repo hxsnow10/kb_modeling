@@ -19,6 +19,7 @@ class BaseModel(object):
         self.neg_h = tf.placeholder(tf.int32, [None])
         self.neg_t = tf.placeholder(tf.int32, [None])
         self.neg_r = tf.placeholder(tf.int32, [None])
+        self.inputs=[self.pos_h, self.pos_t, self.pos_r, self.neg_h, self.neg_t, self.neg_r]
 
         self.build_network()
         self.build_loss()
@@ -46,17 +47,70 @@ class MarginBasedModel(BaseModel):
         if config.L1_flag:
             pos = tf.reduce_sum(abs( self.pos_dist ), 1, keep_dims = True)
             neg = tf.reduce_sum(abs( self.neg_dist ), 1, keep_dims = True)
-            self.predict = pos
+            self.predict = -pos
         else:
             pos = tf.reduce_sum((self.pos_dist) ** 2, 1, keep_dims = True)
             neg = tf.reduce_sum((self.neg_dist) ** 2, 1, keep_dims = True)
-            self.predict = pos
+            self.predict = -pos
         with tf.name_scope("output"):
             self.loss = tf.reduce_sum(tf.maximum(pos - neg + config.margin, 0))
-
-#class NegativeSamplingModel(BaseModel):
-#    def build_loss(self):
+    
+class BasedLogitsModel(object):
+    '''
+    assume input_sample is [[h,r,t],..], [y,...], with negative sampling result.
+    why not use tf to sample: use python could goodly filter true samples.
+    '''
+    def __init__(self):
+        self.pos_h = self.h = tf.placeholder(tf.int32, [None,None])
+        self.pos_t = self.t = tf.placeholder(tf.int32, [None,None])
+        self.pos_r = self.r = tf.placeholder(tf.int32, [None,None])
+        self.labels = tf.placeholder(tf.int32, [None, None])
+        self.inputs=[self.h, self.t, self.r, self.labels]
         
+        self.build_logits()
+        self.build_loss()
+        self.build_others()
+    
+    def build_loss(self):
+        ''' assume self.logits, self.label
+        '''
+        self.losses = tf.nn.softmax_cross_entropy_with_logits(
+            labels=self.labels, logits=tf.cast(self.logits, tf.float32))
+        self.loss=tf.reduce_sum(self.losses)
+        pass
+
+    def build_others(self):
+        tf.summary.scalar("loss", self.loss)
+        self.global_step = tf.Variable(0, name="global_step", trainable=False)
+        self.learning_rate = tf.train.exponential_decay(config.start_learning_rate, self.global_step,
+            config.decay_steps, config.decay_rate, staircase=True)
+        self.learning_rate=tf.maximum(self.learning_rate, config.mini_learning_rate)
+        optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
+        grads_and_vars = optimizer.compute_gradients(self.loss)
+        self.train_op = optimizer.apply_gradients(grads_and_vars, global_step=self.global_step)
+        tf.summary.scalar("learning_rate", self.learning_rate)
+        self.step_summaries = tf.summary.merge_all()
+        # optimizer = tf.train.AdamOptimizer(0.01)
+        # self.train_op=optimizer.minimize(self.loss)
+        self.init=tf.global_variables_initializer()
+        self.saver = tf.train.Saver()
+    
+class ProjESoftmax(BasedLogitsModel):
+    
+    def build_logits(self):
+        self.ent_emb = tf.get_variable(name = "ent_embedding", shape = [config.entity_total, config.hidden_size], initializer = tf.contrib.layers.xavier_initializer(uniform = False))
+        self.rel_emb = tf.get_variable(name = "rel_embedding", shape = [config.relation_total, config.hidden_size], initializer = tf.contrib.layers.xavier_initializer(uniform = False))
+        self.Df_h, self.Df_r, self.Db_t, self.Db_r = [tf.get_variable(name="map_{}".format(i), shape=[1,1,config.hidden_size], ) for i in range(4)]
+        # self.bias_f, self.bias_b = [tf.get_variable(name="bias_{}".format(i), shape=[config.hidden_size], ) for i in range(2)]
+        self.logits1 = tf.reduce_sum((self.Df_h*tf.nn.embedding_lookup(self.ent_emb,self.h)+\
+                self.Df_r*tf.nn.embedding_lookup(self.rel_emb,self.r))*\
+                tf.nn.embedding_lookup(self.ent_emb, self.t),-1)
+        self.logits2 = tf.reduce_sum((self.Db_t*tf.nn.embedding_lookup(self.ent_emb,self.t)+\
+                self.Db_r*tf.nn.embedding_lookup(self.rel_emb,self.r))*\
+                tf.nn.embedding_lookup(self.ent_emb, self.h),-1)
+        self.logits=self.logits1+self.logits2
+        self.predict=self.logits
+     
 class TransEModel(MarginBasedModel):
 
     def build_network(self):

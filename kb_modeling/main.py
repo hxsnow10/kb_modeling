@@ -6,7 +6,7 @@ from tf_utils import check_dir
 from shutil import copy
 import heapq
 config=load_config()
-from model import TransEModel, TransRModel, TransDModel, DistMul
+from model import TransEModel, TransRModel, TransDModel, DistMul, ProjESoftmax
 import sys, os
 import numpy as np
 import time
@@ -18,6 +18,7 @@ getmodel={
     "transD": TransDModel,
     "transR": TransRModel,
     "distmul": DistMul,
+    "proje": ProjESoftmax
 }
 
 def rank(test_triple, compare_triples, true_triples, test_step, filtered=False):
@@ -25,12 +26,16 @@ def rank(test_triple, compare_triples, true_triples, test_step, filtered=False):
     s=len(compare_triples)
     if filtered:
         compare_triples=[triple for triple in compare_triples if triple not in true_triples or triple==test_triple]
-    
     h,t,r=test_triple
-    dist=test_step([h],[t],[r])
     i,dists=0,[]
-    batch_h, batch_r, batch_t = [[triple[k] for triple in compare_triples] for k in range(3)]
-    dists=test_step(batch_h, batch_r, batch_t)
+    if config.model!='proje':
+        dist=float(test_step([h],[t],[r]))
+        batch_h, batch_r, batch_t = [[triple[k] for triple in compare_triples] for k in range(3)]
+        dists=test_step(batch_h, batch_r, batch_t)
+    else:
+        dist=float(test_step([[h]],[[t]],[[r]]))
+        batch_h, batch_r, batch_t = [[[triple[k] for triple in compare_triples]] for k in range(3)]
+        dists=test_step(batch_h, batch_r, batch_t)[0,:]
     # 这里很关键，把所有的作为一个batch传进去，比用512的batch，速度快了大约15倍。
     MR=0
     MR=sum(np.array(dists)>dist)+1
@@ -66,7 +71,8 @@ def evaluate(sess, trainModel, data_path, n=20000000000000):
         }
         predict = sess.run(
             [trainModel.predict], feed_dict)
-        return -predict[0]
+        return predict[0]
+
     metrics=[]
     import time
     st=time.time()
@@ -126,14 +132,6 @@ def main():
                 except:
                     print "loading error"
             def train_data(pos_h_batch, pos_t_batch, pos_r_batch, neg_h_batch, neg_t_batch, neg_r_batch):
-                feed_dict = {
-                    trainModel.pos_h: pos_h_batch,
-                    trainModel.pos_t: pos_t_batch,
-                    trainModel.pos_r: pos_r_batch,
-                    trainModel.neg_h: neg_h_batch,
-                    trainModel.neg_t: neg_t_batch,
-                    trainModel.neg_r: neg_r_batch
-                }
                 return feed_dict
 
 
@@ -155,7 +153,7 @@ def main():
                 for times in range(config.trainTimes):
                     res = 0.0
                     for k,batch_data in enumerate(data):
-                        fd = train_data(*batch_data)
+                        fd=dict(zip(trainModel.inputs, batch_data))
                         if k%1000!=0:
                             loss,_=sess.run([model.loss, model.train_op], feed_dict=fd)
                         else:

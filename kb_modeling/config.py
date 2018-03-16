@@ -14,13 +14,13 @@ class Config(object):
         self.entity_total=len(open(data_dir+"/entity2id.txt",'r').readlines())
         self.relation_total=len(open(data_dir+"/relation2id.txt",'r').readlines())
         
-        self.model="distmul"
-        self.loadFromData =True
+        self.model="proje"
+        self.loadFromData =False
         self.L1_flag = False
         self.hidden_size = 512
         self.trainTimes = 500
         self.margin = 1.0
-        self.batch_size=500
+        self.batch_size=50
         self.start_learning_rate=0.05
         self.mini_learning_rate=0.0005
         self.decay_steps = 40*len(open(self.train_path).readlines())/self.batch_size
