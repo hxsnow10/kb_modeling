@@ -162,6 +162,8 @@ def main():
                             summary_writers['train'].add_summary(summary, step)
                             print k,loss
                         step+=1
+                    trainModel.saver.save(sess, config.model_path)
+                    if times%5!=0:continue
                     train_metrics=evaluate(sess, trainModel, config.train_path)
                     dev_metrics=evaluate(sess, trainModel, config.dev_path)
                     test_metrics=evaluate(sess, trainModel, config.test_path)
@@ -174,7 +176,6 @@ def main():
                     add_summary(summary_writers['train'], train_metrics, step) 
                     add_summary(summary_writers['dev'], dev_metrics, step) 
                     add_summary(summary_writers['test'], test_metrics, step)
-                    trainModel.saver.save(sess, config.model_path)
 
             else:
                 print "[MR, MRR, hits10, hits5, hits1]=", evaluate(sess, trainModel, config.test_path,1000000)

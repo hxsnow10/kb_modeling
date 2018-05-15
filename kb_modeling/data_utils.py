@@ -134,7 +134,7 @@ def load_data(config,mode="train"):
     relation2id, id2relation, rid2name = read_dict(config.relation_path)
     all_true_triples = read_graph([config.train_path, config.dev_path, config.test_path])
     print len(entity2id), len(relation2id)
-    data=TripleDataset(config.train_path, entity2id , relation2id, all_true_triples, 'softmax')
+    data=TripleDataset(config.train_path, entity2id , relation2id, all_true_triples, 'margin')
     return data
     
 if __name__=="__main__":
