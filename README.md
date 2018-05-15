@@ -13,11 +13,13 @@ KB_modeling
 * python main.py test
 
 ### data description
+```
 ├── dev2id.txt  "\t".join([h,t,r]), h,t,r分别是头结点，尾结点，关系的唯一id 
 ├── entity2id.txt   结点id映射名字，训练非必须，可以看效果
 ├── relation2id.txt 关系id映射名字
 ├── test2id.txt 
 └── train2id.txt
+```
 目前有3种数据 WN, FB, Wikidata
 WN，FB在本文件夹里， Wikidata在ftp上 wiki_data/Wikidata_3_kg.zip
 
